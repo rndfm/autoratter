@@ -10,7 +10,9 @@ import win32api
 from pynput import keyboard
 from pynput import mouse
 
-sentryHost = "95.209.144.32"
+from scope import Scope
+
+sentryHost = "192.168.1.91"#"95.209.144.32"
 sentryPortVideo = 5000
 sentryPortControls = 5001
 
@@ -20,20 +22,22 @@ poseX = 0
 poseY = 0
 poseT = 0
 safetyOff = False
-poseXMax = 5000
+poseXMax = 2000
 poseYMax = 2000
 screenCenterX = 0
 screenCenterY = 0
 fpsTick = 0
 fps = 0
 mouseListener = None
-acc = 5000
-speed = 5000
+acc = 2500
+speed = 2500
 font = cv2.FONT_HERSHEY_DUPLEX
 pois = []
 auto = False
 currentPoi = 0
 light = False
+scope = Scope()
+
 
 class poi:
     def __init__(self, x, y):
@@ -49,7 +53,7 @@ def on_release(key):
         safetyOff = False
         poseT = 0
         sock.sendto(b'poseT=%d\n'%poseT, (sentryHost, sentryPortControls))
-    
+
     if (key == keyboard.Key.alt_l):
         poseT = 0
         sock.sendto(b'poseT=%d\n'%poseT, (sentryHost, sentryPortControls))
@@ -82,10 +86,39 @@ def on_press(key):
     if (key == keyboard.Key.ctrl_l):
         safetyOff = True
 
+    # Toggle scope frame adjustment with key f
+    if (key == keyboard.KeyCode.from_char('f')):
+        scope.scopeFrameAdjust = not scope.scopeFrameAdjust
+
+    if (scope.scopeFrameAdjust):
+        scopeY, scopeX = scope.scopeFrameOffset
+        if (key == keyboard.Key.up):
+            scopeY -= 1
+        if (key == keyboard.Key.down):
+            scopeY += 1
+        if (key == keyboard.Key.right):
+            scopeX += 1
+        if (key == keyboard.Key.left):
+            scopeX -= 1
+
+        scope.setFrameOffset((scopeY, scopeX))
+
+    # Toggle scope range offset with key r
+    if (key == keyboard.KeyCode.from_char('r')):
+        scope.rangeAdjustment = not scope.rangeAdjustment
+
+    if (scope.rangeAdjustment):
+        offsetAtRange = int(scope.getOffsetAtRange(scope.rangeMeters))
+        if (key == keyboard.Key.up):
+            offsetAtRange += 1
+        if (key == keyboard.Key.down):
+            offsetAtRange -= 1
+        
+        scope.setOffsetAtRange(scope.rangeMeters, offsetAtRange)
+
     if (key == keyboard.Key.alt_l and safetyOff and poseT < 35):
         poseT += 1
         sock.sendto(b'poseT=%d\n'%poseT, (sentryHost, sentryPortControls))
-
 
     if (key == keyboard.KeyCode.from_char('+')):
         acc += 100
@@ -96,13 +129,15 @@ def on_press(key):
         acc -= 100
         sock.sendto(b'acc=%d\n'%acc, (sentryHost, sentryPortControls))
         print(acc)
+
+
         
-    if (key == keyboard.Key.up):
+    if (key == keyboard.Key.up and not scope.scopeFrameAdjust):
         speed += 100
         sock.sendto(b'speed=%d\n'%speed, (sentryHost, sentryPortControls))
         print(speed)
         
-    if (key == keyboard.Key.down):
+    if (key == keyboard.Key.down and not scope.scopeFrameAdjust):
         speed -= 100
         sock.sendto(b'speed=%d\n'%speed, (sentryHost, sentryPortControls))
         print(speed)
@@ -160,11 +195,15 @@ def on_move(x, y):
             sock.sendto(b'poseX=%d\n'%poseX, (sentryHost, sentryPortControls))
             sock.sendto(b'poseY=%d\n'%poseY, (sentryHost, sentryPortControls))
 
+def on_scroll(x, y, dx, dy):
+    rangeMeters = scope.rangeMeters + dy
+    if (rangeMeters > 0 and rangeMeters < 100):
+        scope.setRange(rangeMeters)
+
 sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
 
 def onMouse(event, x, y, flags, param):
     global captured, mouseListener, auto
-
     if event == cv2.EVENT_RBUTTONDOWN:
         captured = not captured
         if captured:
@@ -172,7 +211,7 @@ def onMouse(event, x, y, flags, param):
             auto_stop()
             sock.sendto(b'enable=1\n', (sentryHost, sentryPortControls))
             win32api.SetCursorPos((screenCenterX, screenCenterY))
-            mouseListener = mouse.Listener(on_move=on_move, on_click=on_click, suppress=True)
+            mouseListener = mouse.Listener(on_move=on_move, on_click=on_click, on_scroll=on_scroll, suppress=True)
             mouseListener.start()
 
 def fpsCounter_function(name):
@@ -264,7 +303,14 @@ def main():
                 if (auto):
                     cv2.putText(frame, "AUTO", (10, 120), font, .5,(255,255,255), 1, cv2.LINE_AA)
 
-                cv2.imshow("Output Frame", frame)
+                frameBgr = cv2.cvtColor(frame,cv2.COLOR_GRAY2RGB)
+                frameHeight, frameWidth = frameBgr.shape[:2]
+                frameCenterY = int(frameHeight/2)
+                frameCenterX = int(frameWidth/2)
+
+                scope.draw(frameBgr)
+
+                cv2.imshow("Output Frame", frameBgr)
                 cv2.waitKey(1)
                 sock.send(b'r')
                 fpsTick += 1
